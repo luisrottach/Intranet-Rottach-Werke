@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#1356AD" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="images/icons/rw-intranet-icon-192.png" />
+  <link rel="apple-touch-icon" href="images/icons/rw-intranet-icon-192.png" />
+  <title>Intranet Rottach‑Werke (Öffentlich)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Intranet Rottach‑Werke</h1>
+    <p class="subtitle">Öffentlicher Zugriff · Installierbar als App · Push‑News</p>
+    <button id="installBtn" hidden>Als App installieren</button>
+  </header>
+  <main>
+    <section id="news">
+      <h2>News</h2>
+      <ul id="newsList" class="cards"></ul>
+    </section>
+    <section id="docs">
+      <h2>Dokumente</h2>
+      <ul id="docsList" class="cards"></ul>
+    </section>
+  </main>
+  <footer><small>© Rottach‑Werke</small></footer>
+  <script src="https://cdn.onesignal.com/sdks/OneSignalSDK.js" async></script>
+  <script>
+    window.OneSignal = window.OneSignal || [];
+    OneSignal.push(function () {
+      OneSignal.SERVICE_WORKER_PATH = 'OneSignalSDKWorker.js';
+      OneSignal.SERVICE_WORKER_UPDATER_PATH = 'OneSignalSDKUpdaterWorker.js';
+      OneSignal.init({
+        appId: 'YOUR-ONESIGNAL-APP-ID',
+        promptOptions: { slidedown: { enabled: true, autoPrompt: true } }
+      });
+    });
+    let deferredPrompt;
+    const installBtn = document.getElementById('installBtn');
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.hidden = false;
+    });
+    installBtn.addEventListener('click', async () => {
+      installBtn.hidden = true;
+      await deferredPrompt.prompt();
+      deferredPrompt = null;
+    });
+    async function loadList(url, targetId, type) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        const items = await res.json();
+        const el = document.getElementById(targetId);
+        el.innerHTML = items.map(item => `
+          <li class="card">
+            <h3>${item.title ?? item.name}</h3>
+            ${item.summary ? `<p>${item.summary}</p>` : ''}
+            <p class="meta">${new Date(item.date || item.created || Date.now()).toLocaleString('de-DE')}</p>
+            ${item.url ? `<a class="btn" href="${item.url}" target="_blank" rel="noopener">Öffnen</a>` : ''}
+          </li>`).join('');
+      } catch (e) {
+        console.error(`Fehler beim Laden von ${type}:`, e);
+      }
+    }
+    loadList('data/news.json', 'newsList', 'News');
+    loadList('data/docs.json', 'docsList', 'Dokumente');
+  </script>
+</body>
+</html>
