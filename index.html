@@ -3,71 +3,185 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#1356AD" />
-  <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="images/icons/rw-intranet-icon-192.png" />
-  <link rel="apple-touch-icon" href="images/icons/rw-intranet-icon-192.png" />
-  <title>Intranet Rottach‑Werke (</title>
-  <link rel="stylesheet" href="styles.css" />
+  <title>Intranet Rottach-Werke (PWA)</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;padding:0}
+    header{background:#0b5cff;color:#fff;padding:12px}
+    main{padding:12px}
+    .folder, .file{padding:8px;border-bottom:1px solid #eee}
+    .folder:hover, .file:hover{background:#f6f8ff;cursor:pointer}
+    .path{font-size:0.9rem;color:#666;margin-bottom:6px}
+    button{padding:.5rem 1rem;border-radius:6px;border:0;background:#0b5cff;color:#fff}
+  </style>
+
+  <!-- OneSignal Web SDK -->
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.js" async></script>
+
+  <!-- MSAL (Auth) -->
+  <script src="https://alcdn.msauth.net/browser/2.53.0/js/msal-browser.min.js"></script>
 </head>
 <body>
   <header>
-    <h1>Intranet Rottach‑Werke</h1>
-    <p class="subtitle">Öffentlicher Zugriff · Installierbar als App · Push‑News</p>
-    <button id="installBtn" hidden>Als App installieren</button>
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-weight:600">Intranet Rottach-Werke</div>
+      <div id="auth-area">
+        <button id="loginBtn">Login</button>
+      </div>
+    </div>
   </header>
+
   <main>
-    <section id="news">
-      <h2>News</h2>
-      <ul id="newsList" class="cards"></ul>
-    </section>
-    <section id="docs">
-      <h2>Dokumente</h2>
-      <ul id="docsList" class="cards"></ul>
-    </section>
+    <div class="path" id="currentPath">/</div>
+    <div id="list"></div>
   </main>
-  <footer><small>© Rottach‑Werke</small></footer>
-  <script src="https://cdn.onesignal.com/sdks/OneSignalSDK.js" async></script>
-  <script>
-    window.OneSignal = window.OneSignal || [];
-    OneSignal.push(function () {
-      OneSignal.SERVICE_WORKER_PATH = 'OneSignalSDKWorker.js';
-      OneSignal.SERVICE_WORKER_UPDATER_PATH = 'OneSignalSDKUpdaterWorker.js';
-      OneSignal.init({
-        appId: 'YOUR-ONESIGNAL-APP-ID',
-        promptOptions: { slidedown: { enabled: true, autoPrompt: true } }
-      });
+
+<script>
+/* ========== Konfiguration: ersetze diese Werte ========== */
+const MSAL_CONFIG = {
+  auth: {
+    clientId: "YOUR_CLIENT_ID",      // Azure AD App (Single-page app)
+    authority: "https://login.microsoftonline.com/YOUR_TENANT_ID",
+    redirectUri: window.location.origin + window.location.pathname
+  }
+};
+const GRAPH_SCOPES = ["Files.Read.All", "User.Read"]; // delegated scopes
+const SHAREPOINT_SITE_ID = "sites/{site-id}"; // alternativ: "sites/<hostname>:/sites/<siteName>"
+const DRIVE_ID = "{drive-id}"; // Drive ID oder leave null to use /sites/{site-id}/drive
+/* ======================================================= */
+
+/* OneSignal init (ersetze appId) */
+window.OneSignal = window.OneSignal || [];
+OneSignal.push(function() {
+  OneSignal.init({
+    appId: "ONESIGNAL_APP_ID", // <--- ersetzen
+    allowLocalhostAsSecureOrigin: true
+  });
+});
+
+/* MSAL Client */
+const msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+const loginBtn = document.getElementById('loginBtn');
+
+async function login() {
+  try {
+    const loginResp = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
+    console.log('login', loginResp);
+    afterLogin();
+  } catch (e) {
+    console.error(e);
+    alert('Login fehlgeschlagen: ' + (e.message || e));
+  }
+}
+
+async function getToken() {
+  const accounts = msalInstance.getAllAccounts();
+  if (!accounts || accounts.length===0) throw new Error('Nicht eingeloggt');
+  try {
+    const resp = await msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: accounts[0] });
+    return resp.accessToken;
+  } catch (e) {
+    // Fallback: interactive
+    const resp = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+    return resp.accessToken;
+  }
+}
+
+loginBtn.addEventListener('click', login);
+
+/* after login: update UI + load root folder */
+async function afterLogin(){
+  const accounts = msalInstance.getAllAccounts();
+  document.getElementById('auth-area').innerHTML = `
+    <span style="margin-right:1rem">${accounts[0].username}</span>
+    <button id="logoutBtn">Logout</button>
+  `;
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    msalInstance.logout();
+    location.reload();
+  });
+
+  // You can optionally register OneSignal external_user_id here (tie OS user to MS user)
+  OneSignal.push(function() {
+    OneSignal.getUserId(function(osId) {
+      console.log("OneSignal userId:", osId);
+      // Optional: send osId + ms user email to your backend to tag users
     });
-    let deferredPrompt;
-    const installBtn = document.getElementById('installBtn');
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      installBtn.hidden = false;
-    });
-    installBtn.addEventListener('click', async () => {
-      installBtn.hidden = true;
-      await deferredPrompt.prompt();
-      deferredPrompt = null;
-    });
-    async function loadList(url, targetId, type) {
-      try {
-        const res = await fetch(url, { cache: 'no-store' });
-        const items = await res.json();
-        const el = document.getElementById(targetId);
-        el.innerHTML = items.map(item => `
-          <li class="card">
-            <h3>${item.title ?? item.name}</h3>
-            ${item.summary ? `<p>${item.summary}</p>` : ''}
-            <p class="meta">${new Date(item.date || item.created || Date.now()).toLocaleString('de-DE')}</p>
-            ${item.url ? `<a class="btn" href="${item.url}" target="_blank" rel="noopener">Öffnen</a>` : ''}
-          </li>`).join('');
-      } catch (e) {
-        console.error(`Fehler beim Laden von ${type}:`, e);
-      }
+  });
+
+  // load root drive
+  await loadFolder(null); // null -> root of drive
+}
+
+/* Render list of items in element #list; itemId null means drive root */
+async function loadFolder(itemId){
+  const listEl = document.getElementById('list');
+  listEl.innerHTML = '<div>lade…</div>';
+  try {
+    const token = await getToken();
+    // Build Graph endpoint: either /sites/{site-id}/drives/{drive-id}/root/children 
+    let url;
+    if (itemId) {
+      url = `https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_ID}/drives/${DRIVE_ID}/items/${itemId}/children`;
+    } else {
+      url = `https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_ID}/drives/${DRIVE_ID}/root/children`;
     }
-    loadList('data/news.json', 'newsList', 'News');
-    loadList('data/docs.json', 'docsList', 'Dokumente');
-  </script>
+    const r = await fetch(url, {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!r.ok) throw new Error('Graph error ' + r.status);
+    const data = await r.json();
+    // render
+    document.getElementById('currentPath').textContent = itemId ? `Item: ${itemId}` : '/';
+    listEl.innerHTML = '';
+    // sort: folders first
+    data.value.sort((a,b) => (a.folder ? -1:1) - (b.folder ? -1:1));
+    for (const it of data.value) {
+      const div = document.createElement('div');
+      div.className = it.folder ? 'folder' : 'file';
+      div.innerHTML = `<strong>${it.name}</strong><div style="font-size:.85rem;color:#666">${it.folder ? 'Ordner' : it.file ? it.file.mimeType : ''}</div>`;
+      div.addEventListener('click', () => {
+        if (it.folder) {
+          loadFolder(it.id);
+        } else {
+          openFile(it.id, it.name);
+        }
+      });
+      listEl.appendChild(div);
+    }
+  } catch (e) {
+    listEl.innerHTML = `<div style="color:red">Fehler: ${e.message}</div>`;
+    console.error(e);
+  }
+}
+
+/* Öffnet die Datei — wir holen die Download-URL über Graph und öffnen in neuem Tab */
+async function openFile(itemId, name){
+  try {
+    const token = await getToken();
+    const metaUrl = `https://graph.microsoft.com/v1.0/sites/${SHAREPOINT_SITE_ID}/drives/${DRIVE_ID}/items/${itemId}?select=@microsoft.graph.downloadUrl`;
+    const r = await fetch(metaUrl, { headers: { Authorization: 'Bearer ' + token }});
+    if (!r.ok) throw new Error('Graph meta error ' + r.status);
+    const meta = await r.json();
+    if (meta['@microsoft.graph.downloadUrl']) {
+      window.open(meta['@microsoft.graph.downloadUrl'], '_blank');
+    } else {
+      alert('Keine direkte Download-URL verfügbar.');
+    }
+  } catch (e) {
+    alert('Fehler beim Öffnen: ' + e.message);
+    console.error(e);
+  }
+}
+
+/* Wenn bereits eingeloggt (z. B. redirect), try silent token and continue */
+(async function init(){
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts && accounts.length>0) {
+    afterLogin();
+  }
+})();
+</script>
 </body>
 </html>
+
